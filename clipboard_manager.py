@@ -55,6 +55,7 @@ def app_dir():
 
 
 DB_PATH = os.path.join(app_dir(), "clipboard.db")
+APP_NAME = "magic_clipboard"
 PREVIEW_LEN = 80            # 목록에 보여줄 내용 길이
 SEARCH_DEBOUNCE_MS = 150    # 검색 입력 후 목록 갱신까지 대기
 THUMB_W, THUMB_H = 56, 34   # 썸네일 크기
@@ -405,21 +406,41 @@ def qimage_to_png(img):
     return bytes(buf.data())
 
 
+def _draw_sparkle(p, cx, cy, r, color):
+    """4각 별(반짝이) — magic_clipboard 의 'magic'"""
+    from PySide6.QtGui import QPolygonF
+    from PySide6.QtCore import QPointF
+    w = r * 0.28
+    star = QPolygonF([
+        QPointF(cx, cy - r), QPointF(cx + w, cy - w),
+        QPointF(cx + r, cy), QPointF(cx + w, cy + w),
+        QPointF(cx, cy + r), QPointF(cx - w, cy + w),
+        QPointF(cx - r, cy), QPointF(cx - w, cy - w),
+    ])
+    p.setBrush(color)
+    p.drawPolygon(star)
+
+
 def tray_icon_pixmap():
-    """클립보드 모양 트레이 아이콘을 그려서 생성"""
+    """magic_clipboard 아이콘: 클립보드 + 마법 반짝이"""
     pm = QPixmap(64, 64)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
     p.setPen(Qt.NoPen)
+    # 클립보드 본체
     p.setBrush(QColor(52, 120, 212))
-    p.drawRoundedRect(10, 8, 44, 52, 6, 6)
+    p.drawRoundedRect(8, 8, 42, 52, 6, 6)
     p.setBrush(QColor(150, 190, 240))
-    p.drawRoundedRect(22, 2, 20, 12, 4, 4)
+    p.drawRoundedRect(19, 2, 20, 12, 4, 4)
+    # 내용 줄
     p.setBrush(QColor(255, 255, 255))
-    p.drawRect(18, 24, 28, 4)
-    p.drawRect(18, 34, 28, 4)
-    p.drawRect(18, 44, 20, 4)
+    p.drawRect(15, 24, 28, 4)
+    p.drawRect(15, 34, 28, 4)
+    p.drawRect(15, 44, 20, 4)
+    # 마법 반짝이 (금색 큰 별 + 작은 별)
+    _draw_sparkle(p, 50, 46, 13, QColor(255, 196, 32))
+    _draw_sparkle(p, 56, 26, 6, QColor(255, 220, 110))
     p.end()
     return pm
 
@@ -467,7 +488,7 @@ class CategoryDialog(QDialog):
 
     def _accept(self):
         if not self.cb1.currentText().strip() and self.cb2.currentText().strip():
-            QMessageBox.information(self, "클립보드 관리",
+            QMessageBox.information(self, APP_NAME,
                                     "소분류를 지정하려면 대분류를 먼저 입력하세요.")
             return
         self.accept()
@@ -541,7 +562,7 @@ class MiniWindow(QWidget):
     def __init__(self, manager):
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.manager = manager
-        self.setWindowTitle("클립보드 검색")
+        self.setWindowTitle(APP_NAME)
 
         self.search = SearchEdit()
         self.search.setPlaceholderText("검색  (/k 키검색, /c 카테고리검색)")
@@ -627,7 +648,7 @@ class MainWindow(QWidget):
     def __init__(self, manager):
         super().__init__()
         self.manager = manager
-        self.setWindowTitle("클립보드 관리")
+        self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(tray_icon_pixmap()))
         self.resize(900, 540)
 
@@ -707,7 +728,7 @@ class MainWindow(QWidget):
     def set_category(self):
         ids = self.tree.selected_ids()
         if not ids:
-            QMessageBox.information(self, "클립보드 관리", "항목을 먼저 선택하세요.")
+            QMessageBox.information(self, APP_NAME, "항목을 먼저 선택하세요.")
             return
         cat1, cat2, key = self.manager.db.get_category_key(ids[0])
         if len(ids) > 1:
@@ -721,7 +742,7 @@ class MainWindow(QWidget):
         ids = self.tree.selected_ids()
         if not ids:
             return
-        ret = QMessageBox.question(self, "클립보드 관리", f"{len(ids)}개 항목을 삭제할까요?")
+        ret = QMessageBox.question(self, APP_NAME, f"{len(ids)}개 항목을 삭제할까요?")
         if ret == QMessageBox.Yes:
             self.manager.db.delete(ids)
             self.manager.refresh_all()
@@ -776,7 +797,7 @@ class Manager:
         self.tray = None
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(QIcon(tray_icon_pixmap()), self.app)
-            self.tray.setToolTip("클립보드 관리")
+            self.tray.setToolTip(APP_NAME)
             menu = QMenu()
             act_open = QAction("열기/숨기기 (전체 UI)", menu)
             act_open.triggered.connect(self.toggle_full)
@@ -884,6 +905,8 @@ SINGLE_INSTANCE_KEY = "ClipboardManagerCM-single"
 
 def main():
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
 
     # 중복 실행 방지: 이미 실행 중이면 그 인스턴스의 전체 UI를 띄우고 종료
