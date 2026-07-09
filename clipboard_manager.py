@@ -30,6 +30,7 @@ from datetime import datetime
 
 from PySide6.QtCore import (QAbstractNativeEventFilter, QBuffer, QIODevice,
                             QPoint, QSize, Qt, QTimer, Signal)
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import (QAction, QBrush, QColor, QGuiApplication, QIcon,
                            QImage, QKeySequence, QPainter, QPen, QPixmap,
                            QShortcut)
@@ -45,7 +46,15 @@ if IS_WINDOWS:
     import winreg
     from ctypes import wintypes
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clipboard.db")
+def app_dir():
+    """데이터 저장 기준 폴더. PyInstaller 포터블 exe 로 실행되면 exe 가 있는 폴더
+    (frozen 상태의 __file__ 은 임시 압축해제 폴더라서 쓰면 안 됨)"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+DB_PATH = os.path.join(app_dir(), "clipboard.db")
 PREVIEW_LEN = 80            # 목록에 보여줄 내용 길이
 SEARCH_DEBOUNCE_MS = 150    # 검색 입력 후 목록 갱신까지 대기
 THUMB_W, THUMB_H = 56, 34   # 썸네일 크기
@@ -133,6 +142,8 @@ def send_ctrl_c_to_foreground():
 # ==================== 시작 프로그램(자동 실행) ====================
 
 def autostart_command():
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'   # 포터블 exe 자체를 등록
     exe = sys.executable
     pythonw = os.path.join(os.path.dirname(exe), "pythonw.exe")
     if os.path.exists(pythonw):
@@ -349,6 +360,25 @@ class ClipTree(QTreeWidget):
         if self.topLevelItemCount() > 0:
             return self.topLevelItem(0).data(0, Qt.UserRole)
         return None
+
+
+def make_clip_item(db, row, columns):
+    """검색 결과 한 행을 QTreeWidgetItem 으로 변환.
+    columns: 'full' → 전체 UI 컬럼, 'mini' → 미니 UI 컬럼"""
+    cid, kind, text, c1, c2, key, created = row
+    if columns == "full":
+        item = QTreeWidgetItem(["", make_preview(text), c1, c2, key, created])
+    else:
+        item = QTreeWidgetItem(["", make_preview(text), key])
+    item.setData(0, Qt.UserRole, cid)
+    # 텍스트 행 기준으로 행 높이가 계산되면 썸네일이 행을 넘어 겹치므로
+    # 모든 행 높이를 썸네일 크기에 맞춰 고정한다
+    item.setSizeHint(0, QSize(THUMB_W + 8, THUMB_H + 6))
+    if kind == "image":
+        icon = make_thumb_icon(db.get_image(cid))
+        if icon:
+            item.setIcon(0, icon)
+    return item
 
 
 def make_thumb_icon(png_bytes):
@@ -577,14 +607,8 @@ class MiniWindow(QWidget):
     def refresh(self):
         rows = self.manager.db.search(self.search.search_text())[:self.MAX_ROWS]
         self.tree.clear()
-        for cid, kind, text, c1, c2, key, created in rows:
-            item = QTreeWidgetItem(["", make_preview(text), key])
-            item.setData(0, Qt.UserRole, cid)
-            if kind == "image":
-                icon = make_thumb_icon(self.manager.db.get_image(cid))
-                if icon:
-                    item.setIcon(0, icon)
-            self.tree.addTopLevelItem(item)
+        for row in rows:
+            self.tree.addTopLevelItem(make_clip_item(self.manager.db, row, "mini"))
 
     def _copy(self):
         cid = self.tree.first_id()
@@ -671,14 +695,8 @@ class MainWindow(QWidget):
     def refresh(self):
         rows = self.manager.db.search(self.search.search_text())
         self.tree.clear()
-        for cid, kind, text, c1, c2, key, created in rows:
-            item = QTreeWidgetItem(["", make_preview(text), c1, c2, key, created])
-            item.setData(0, Qt.UserRole, cid)
-            if kind == "image":
-                icon = make_thumb_icon(self.manager.db.get_image(cid))
-                if icon:
-                    item.setIcon(0, icon)
-            self.tree.addTopLevelItem(item)
+        for row in rows:
+            self.tree.addTopLevelItem(make_clip_item(self.manager.db, row, "full"))
         self.status.setText(f"{len(rows)}개 항목")
 
     def copy_selected(self):
@@ -861,10 +879,34 @@ class Manager:
         self.app.quit()
 
 
+SINGLE_INSTANCE_KEY = "ClipboardManagerCM-single"
+
+
 def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    # 중복 실행 방지: 이미 실행 중이면 그 인스턴스의 전체 UI를 띄우고 종료
+    probe = QLocalSocket()
+    probe.connectToServer(SINGLE_INSTANCE_KEY)
+    if probe.waitForConnected(300):
+        probe.write(b"show")
+        probe.waitForBytesWritten(300)
+        probe.disconnectFromServer()
+        sys.exit(0)
+
+    QLocalServer.removeServer(SINGLE_INSTANCE_KEY)  # 비정상 종료로 남은 소켓 정리
+    server = QLocalServer()
+    server.listen(SINGLE_INSTANCE_KEY)
+
     manager = Manager(app)
+
+    def on_new_connection():
+        conn = server.nextPendingConnection()
+        if conn is not None:
+            conn.readyRead.connect(lambda: (conn.readAll(), manager.show_full()))
+    server.newConnection.connect(on_new_connection)
+
     manager.show_full()
     sys.exit(app.exec())
 

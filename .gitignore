@@ -14,6 +14,11 @@ clipboard.db-shm
 # 별도 git 저장소로 클론한 Ditto 소스
 Ditto/
 
+# PyInstaller 빌드 산출물
+build/
+dist/
+*.spec
+
 # IDE / 에디터
 .idea/
 .vscode/
