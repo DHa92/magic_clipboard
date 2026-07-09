@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 클립보드 데이터 (개인 데이터 — 커밋 금지)
+clipboard.db
+clipboard.db-journal
+clipboard.db-wal
+clipboard.db-shm
+
+# 별도 git 저장소로 클론한 Ditto 소스
+Ditto/
+
+# IDE / 에디터
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
