@@ -188,16 +188,18 @@ class ClipDB:
                    text      TEXT NOT NULL,
                    image     BLOB,
                    hash      TEXT DEFAULT '',
+                   html      TEXT DEFAULT '',
                    category1 TEXT DEFAULT '',
                    category2 TEXT DEFAULT '',
                    item_key  TEXT DEFAULT '',
                    created   TEXT NOT NULL
                )"""
         )
-        # 예전 버전 DB 업그레이드 (텍스트 전용 시절)
+        # 예전 버전 DB 업그레이드
         for ddl in ("ALTER TABLE clips ADD COLUMN kind TEXT DEFAULT 'text'",
                     "ALTER TABLE clips ADD COLUMN image BLOB",
-                    "ALTER TABLE clips ADD COLUMN hash TEXT DEFAULT ''"):
+                    "ALTER TABLE clips ADD COLUMN hash TEXT DEFAULT ''",
+                    "ALTER TABLE clips ADD COLUMN html TEXT DEFAULT ''"):
             try:
                 self.conn.execute(ddl)
             except sqlite3.OperationalError:
@@ -221,13 +223,13 @@ class ClipDB:
         )
         self.conn.commit()
 
-    def add(self, text):
+    def add(self, text, html=""):
         row = self.conn.execute("SELECT kind, text FROM clips ORDER BY id DESC LIMIT 1").fetchone()
         if row and row[0] == "text" and row[1] == text:
             return None
         cur = self.conn.execute(
-            "INSERT INTO clips(kind, text, created) VALUES('text', ?, ?)",
-            (text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            "INSERT INTO clips(kind, text, html, created) VALUES('text', ?, ?, ?)",
+            (text, html or "", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -246,8 +248,8 @@ class ClipDB:
         return cur.lastrowid
 
     def search(self, query):
-        sql = ("SELECT id, kind, text, category1, category2, item_key, created "
-               "FROM clips")
+        sql = ("SELECT id, kind, text, category1, category2, item_key, created, "
+               "html <> '' FROM clips")
         params = []
         query = query.strip()
         if query.startswith("/k "):
@@ -266,9 +268,9 @@ class ClipDB:
 
     def get_clip(self, clip_id):
         row = self.conn.execute(
-            "SELECT kind, text, image FROM clips WHERE id = ?", (clip_id,)
+            "SELECT kind, text, image, html FROM clips WHERE id = ?", (clip_id,)
         ).fetchone()
-        return row if row else (None, None, None)
+        return row if row else (None, None, None, None)
 
     def get_image(self, clip_id):
         row = self.conn.execute("SELECT image FROM clips WHERE id = ?", (clip_id,)).fetchone()
@@ -363,10 +365,38 @@ class ClipTree(QTreeWidget):
         return None
 
 
+_rich_icon_cache = None
+
+
+def make_rich_icon():
+    """서식(HTML) 있는 텍스트 항목 표시용 'Aa' 배지"""
+    global _rich_icon_cache
+    if _rich_icon_cache is not None:
+        return _rich_icon_cache
+    from PySide6.QtGui import QFont
+    canvas = QPixmap(THUMB_W, THUMB_H)
+    canvas.fill(QColor(246, 246, 246))
+    p = QPainter(canvas)
+    p.setRenderHint(QPainter.Antialiasing)
+    font = QFont()
+    font.setBold(True)
+    font.setPixelSize(18)
+    p.setFont(font)
+    p.setPen(QPen(QColor(52, 120, 212)))
+    p.drawText(canvas.rect().adjusted(0, -2, 0, -2), Qt.AlignCenter, "Aa")
+    p.setPen(QPen(QColor(220, 80, 60), 2))
+    p.drawLine(14, THUMB_H - 7, THUMB_W - 14, THUMB_H - 7)
+    p.setPen(QPen(QColor(170, 170, 170)))
+    p.drawRect(0, 0, THUMB_W - 1, THUMB_H - 1)
+    p.end()
+    _rich_icon_cache = QIcon(canvas)
+    return _rich_icon_cache
+
+
 def make_clip_item(db, row, columns):
     """검색 결과 한 행을 QTreeWidgetItem 으로 변환.
     columns: 'full' → 전체 UI 컬럼, 'mini' → 미니 UI 컬럼"""
-    cid, kind, text, c1, c2, key, created = row
+    cid, kind, text, c1, c2, key, created, has_html = row
     if columns == "full":
         item = QTreeWidgetItem(["", make_preview(text), c1, c2, key, created])
     else:
@@ -379,6 +409,8 @@ def make_clip_item(db, row, columns):
         icon = make_thumb_icon(db.get_image(cid))
         if icon:
             item.setIcon(0, icon)
+    elif has_html:
+        item.setIcon(0, make_rich_icon())
     return item
 
 
@@ -859,7 +891,8 @@ class Manager:
             return
         added = None
         if md.hasText() and md.text():
-            added = self.db.add(md.text())
+            html = md.html() if md.hasHtml() else ""
+            added = self.db.add(md.text(), html)
         elif md.hasImage():
             img = self.clipboard.image()
             if not img.isNull():
@@ -869,14 +902,21 @@ class Manager:
             self.refresh_all()
 
     def copy_clip(self, clip_id):
-        kind, text, image = self.db.get_clip(clip_id)
+        kind, text, image, html = self.db.get_clip(clip_id)
         if kind is None:
             return False
         self._suppress_capture = True
         if kind == "image" and image is not None:
             self.clipboard.setImage(QImage.fromData(image))
         else:
-            self.clipboard.setText(text)
+            # 텍스트 + (있으면) HTML 을 함께 올린다 →
+            # 메모장엔 일반 텍스트로, 워드 등엔 서식 그대로 붙는다
+            from PySide6.QtCore import QMimeData
+            md = QMimeData()
+            md.setText(text)
+            if html:
+                md.setHtml(html)
+            self.clipboard.setMimeData(md)
         return True
 
     # ---------- UI ----------
