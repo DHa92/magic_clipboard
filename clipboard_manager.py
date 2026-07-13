@@ -28,8 +28,8 @@ import sys
 import time
 from datetime import datetime
 
-from PySide6.QtCore import (QAbstractNativeEventFilter, QBuffer, QIODevice,
-                            QPoint, QSize, Qt, QTimer, Signal)
+from PySide6.QtCore import (QAbstractNativeEventFilter, QBuffer, QEvent,
+                            QIODevice, QPoint, QSize, Qt, QTimer, Signal)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import (QAction, QBrush, QColor, QGuiApplication, QIcon,
                            QImage, QKeySequence, QPainter, QPen, QPixmap,
@@ -598,6 +598,12 @@ class MiniWindow(QWidget):
             self.hide()
         else:
             super().keyPressEvent(event)
+
+    def event(self, e):
+        # 미니 창 밖(다른 창/다른 앱)을 클릭해서 포커스를 잃으면 자동으로 닫는다
+        if e.type() == QEvent.WindowDeactivate and self.isVisible():
+            self.hide()
+        return super().event(e)
 
     def toggle(self, anchor=None):
         if self.isVisible():
